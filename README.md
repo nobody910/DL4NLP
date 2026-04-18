@@ -1,2 +1,2 @@
 # DL4NLP
-Codes for WASP course assign “Deep Learning for Natural Language Processing
+Codes for WASP course assignment “Deep Learning for Natural Language Processing
