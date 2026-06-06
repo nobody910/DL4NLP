@@ -1,2 +1,4 @@
 # DL4NLP
-Codes for WASP course assignment “Deep Learning for Natural Language Processing
+Codes for WASP course assignment “Deep Learning for Natural Language Processing“.
+
+Four branches are four assignments.
