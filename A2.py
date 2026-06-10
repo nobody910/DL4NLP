@@ -105,6 +105,7 @@ class A2Attention(nn.Module):
         k = self.k_norm(k)
         
         # 3. Reshape for Multi-Head Attention: (batch, seq, heads, head_dim) -> (batch, heads, seq, head_dim)
+        # Then transpose to (batch, heads, seq, head_dim) for parallel matrix multiplication
         q = q.view(b, m, self.num_heads, self.head_dim).transpose(1, 2)
         k = k.view(b, m, self.num_heads, self.head_dim).transpose(1, 2)
         v = v.view(b, m, self.num_heads, self.head_dim).transpose(1, 2)
@@ -119,7 +120,8 @@ class A2Attention(nn.Module):
             query=q, key=k, value=v, is_causal=True
         )
         
-        # 6. Re-assemble heads and Output Projection
+        # 6. Re-assemble heads: (batch, heads, seq, head_dim) -> (batch, seq, heads, head_dim)
+        # .contiguous() ensures memory layout is correct before viewing back to (batch, seq, hidden_size)
         attn_out = attn_out.transpose(1, 2).contiguous().view(b, m, d)
         return self.o_proj(attn_out)
 
