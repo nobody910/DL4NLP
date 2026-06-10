@@ -12,28 +12,41 @@ import matplotlib.pyplot as plt
 ### Part 1. Tokenization.
 ###
 def lowercase_tokenizer(text):
+    """
+    Standardizes input text by splitting it into words using NLTK's word_tokenize
+    and converting each token to lowercase to reduce vocabulary sparsity.
+    """
     return [t.lower() for t in nltk.word_tokenize(text)]
 
 def build_tokenizer(train_file, tokenize_fun=lowercase_tokenizer, max_voc_size=None, model_max_length=None,
                     pad_token='<PAD>', unk_token='<UNK>', bos_token='<BOS>', eos_token='<EOS>'):
-    """ Build a tokenizer from the given file. """
-
+    """
+    Factory function to construct an instance of A1Tokenizer by analyzing a training file.
+    It counts token frequencies, enforces vocabulary constraints, and establishes 
+    bidirectional mappings between tokens and numerical indices.
+    """
+    
     # 1. Read texts and count token frequencies
     counter = Counter()
     with open(train_file, 'r', encoding='utf-8') as f:
         for line in f:
             text = line.strip()
             if text:
+                # Tokenize the paragraph and update the global frequency counter
                 counter.update(tokenize_fun(text))
 
-    # 2. Add special tokens first
+    # 2. Define the exact order of special tokens
+    # Placing special tokens first ensures they receive stable, predictable indices (0, 1, 2, 3)
     special_tokens = [pad_token, unk_token, bos_token, eos_token]
     
-    # 3. Limit vocabulary size
+    # 3. Limit vocabulary size based on the user-specified hyperparameter
+    # We subtract the slots reserved for special tokens from the maximum allowed size
     limit = max_voc_size - len(special_tokens) if max_voc_size is not None else None
+    # Extract the top-K most frequent ordinary words from the corpus
     common_words = [word for word, freq in counter.most_common(limit)]
-    
+    # Construct the final unified vocabulary list
     vocab = special_tokens + common_words
+    # Build bidirectional lookup maps for O(1) integer-to-string and string-to-integer conversions
     str_to_int = {word: i for i, word in enumerate(vocab)}
     int_to_str = {i: word for i, word in enumerate(vocab)}
 
@@ -43,7 +56,6 @@ def build_tokenizer(train_file, tokenize_fun=lowercase_tokenizer, max_voc_size=N
 
 
 class A1Tokenizer:
-    """A minimal implementation of a tokenizer similar to tokenizers in the HuggingFace library."""
 
     def __init__(self, str_to_int, int_to_str, model_max_length, pad_token, unk_token, bos_token, eos_token):
         self.str_to_int = str_to_int
