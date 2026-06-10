@@ -4,7 +4,11 @@ from transformers import PreTrainedModel, PretrainedConfig
 from transformers.modeling_outputs import CausalLMOutput
 
 class A2ModelConfig(PretrainedConfig):
-    """Configuration object that stores hyperparameters that define the Transformer language model."""
+    """
+    Configuration object that stores all hyperparameters defining the Transformer language model.
+    Inheriting from HuggingFace's PretrainedConfig allows the model to easily save/load 
+    configurations using standard HF methods (e.g., from_pretrained).
+    """
     def __init__(self, vocab_size=10000, hidden_size=256, intermediate_size=512, num_attention_heads=8, 
                  num_hidden_layers=4,
                  rope_theta=10000.0, hidden_act='silu', max_position_embeddings=2048, rms_norm_eps=1e-6, **kwargs):
@@ -12,53 +16,69 @@ class A2ModelConfig(PretrainedConfig):
         self.vocab_size = vocab_size
         self.hidden_size = hidden_size
         self.max_position_embeddings = max_position_embeddings
-        self.rms_norm_eps = rms_norm_eps
+        self.rms_norm_eps = rms_norm_eps # Small value to prevent division by zero in RMSNorm
         self.num_attention_heads = num_attention_heads
-        self.rope_theta = rope_theta
-        self.hidden_act = hidden_act
-        self.intermediate_size = intermediate_size
-        self.num_hidden_layers = num_hidden_layers
+        self.rope_theta = rope_theta # Base frequency for Rotary Position Embeddings (RoPE)
+        self.hidden_act = hidden_act # Activation function (SiLU is used for SwiGLU)
+        self.intermediate_size = intermediate_size # Hidden dimension size inside the MLP
+        self.num_hidden_layers = num_hidden_layers # Number of Transformer blocks
 
 
 class A2MLP(nn.Module):
-    """The MLP layer of the Transformer. Uses the SwiGLU architecture."""
+    """
+    The MLP (Feed-Forward) layer of the Transformer. 
+    Uses the SwiGLU architecture (widely used in LLaMA, OLMo, etc.) instead of the standard ReLU MLP.
+    """
     def __init__(self, config):
         super().__init__()
         assert(config.hidden_act == 'silu')
-        # OLMo 2 / Llama style SwiGLU components: all without bias
+        # OLMo 2 / Llama style SwiGLU components: 
+        # Modern LLMs typically remove bias terms in linear layers for better training stability.
         self.gate_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
         self.up_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
         self.down_proj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
-        self.act_fn = nn.SiLU()
+        self.act_fn = nn.SiLU() # Sigmoid Linear Unit (SiLU), also known as Swish
 
     def forward(self, hidden_states):
         # SwiGLU formulation: down_proj(SiLU(gate_proj(x)) * up_proj(x))
+        # The 'gate' controls the information flow from the 'up' projection before projecting back down.
         return self.down_proj(self.act_fn(self.gate_proj(hidden_states)) * self.up_proj(hidden_states))
 
 
 class A2RMSNorm(nn.Module):
-    """RMS layer normalization."""
+    """
+    Root Mean Square Layer Normalization (RMSNorm).
+    A computationally cheaper alternative to standard LayerNorm. It only scales the variance
+    and does not recenter the mean, which has been shown to perform equally well in LLMs.
+    """
     def __init__(self, config):
         super().__init__()
         self.eps = config.rms_norm_eps
-        # Learnable weight (gamma), size equal to hidden_size
+        # Learnable scaling parameter (gamma), initialized to ones. Size equals hidden_size.
         self.weight = nn.Parameter(torch.ones(config.hidden_size))
 
     def forward(self, hidden_states):
-        # Calculate Variance (using float32 to avoid overflow/underflow issues)
+        # Calculate Variance. 
+        # Cast to float32 before squaring to avoid numerical overflow/underflow issues in half-precision (fp16).
         variance = hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
+        # Normalize the hidden states (x / sqrt(Var + eps))
         hidden_states = hidden_states * torch.rsqrt(variance + self.eps)
         # Apply learnable parameter and cast back to original dtype
+        # Apply the learnable weight parameter and cast back to the original data type (e.g., float16 or bfloat16)
         return self.weight * hidden_states.to(self.weight.dtype)
 
 
 class A2Attention(nn.Module):
-    """The multi-head attention layer of the Transformer. Uses standard scaled dot-product attention with causal masking."""
+    """
+    The Multi-Head Attention (MHA) layer of the Transformer. 
+    Uses scaled dot-product attention with causal masking and Rotary Position Embeddings (RoPE).
+    """
     
     def __init__(self, config):
         super().__init__()
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_attention_heads
+        # Dimension of each individual attention head
         self.head_dim = config.hidden_size // config.num_attention_heads
         
         # Q, K, V, and Output projections without bias
@@ -72,6 +92,7 @@ class A2Attention(nn.Module):
         self.k_norm = A2RMSNorm(config)
 
     def forward(self, hidden_states, rope_rotations):
+        # b: batch_size, m: sequence_length, d: hidden_size
         b, m, d = hidden_states.shape
         
         # 1. Linear Projections
@@ -89,6 +110,7 @@ class A2Attention(nn.Module):
         v = v.view(b, m, self.num_heads, self.head_dim).transpose(1, 2)
         
         # 4. Apply Rotary Position Embeddings (RoPE)
+        # This injects relative positional information directly into the attention mechanism.
         q, k = apply_rotary_pos_emb(q, k, rope_rotations)
         
         # 5. Scaled Dot-Product Attention with Causal Mask
