@@ -138,15 +138,15 @@ class A2DecoderLayer(nn.Module):
     def forward(self, hidden_states, rope_rotations):
         # Block 1: Attention with Pre-Norm and Residual Connection
         residual = hidden_states
-        hidden_states = self.input_layernorm(hidden_states)
+        hidden_states = self.input_layernorm(hidden_states) #Pre-Norm
         hidden_states = self.self_attn(hidden_states, rope_rotations)
-        hidden_states = residual + hidden_states
+        hidden_states = residual + hidden_states #Skip Connection
         
         # Block 2: MLP with Pre-Norm and Residual Connection
         residual = hidden_states
-        hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = self.mlp(hidden_states)
-        hidden_states = residual + hidden_states
+        hidden_states = self.post_attention_layernorm(hidden_states) #Pre-Norm
+        hidden_states = self.mlp(hidden_states) #SwiGLU FFN
+        hidden_states = residual + hidden_states #Skip Connection
         
         return hidden_states
 
@@ -253,31 +253,35 @@ def generate_text(model, tokenizer, prompt, max_length=50, temperature=1.0, topk
     """
     Top-K sampling algorithm for text generation.
     """
+    # Set model to evaluation mode (disables dropout, etc.)
     model.eval()
-    
+    # Tokenize the input prompt string into tensor IDs
     encoded = tokenizer([prompt], return_tensors='pt')
     input_ids = encoded['input_ids'].to(device)
     
     generated_text = []
 
     for _ in range(max_length):
-        with torch.no_grad():
+        with torch.no_grad(): # Disable gradient calculation for faster inference
             outputs = model(input_ids)
-            
+            # Extract logits for the VERY LAST token in the sequence 
+            # and scale by temperature. 
+            # T > 1.0 increases randomness; T < 1.0 makes it more deterministic.
             next_token_logits = outputs.logits[0, -1, :] / temperature
-            
+            # Top-K filtering: keep only the top 'K' most likely next tokens
             topk_logits, topk_indices = torch.topk(next_token_logits, topk)
-            
+            # Convert the raw top-K logits into a valid probability distribution (summing to 1)
             probs = torch.nn.functional.softmax(topk_logits, dim=-1)
-            
+            # Create a categorical distribution and sample 1 token based on the probabilities
             dist = torch.distributions.Categorical(probs)
             next_token_idx_in_topk = dist.sample()
-            
+            # Map the sampled index back to the actual vocabulary token ID
             next_token_id = topk_indices[next_token_idx_in_topk].unsqueeze(0).unsqueeze(0)
-            
+            # Append the new token to the sequence for the next autoregressive step
             input_ids = torch.cat([input_ids, next_token_id], dim=-1)
             
             generated_token = next_token_id.item()
+            # Stop generation early if the model predicts the End-Of-Sequence (EOS) token
             if generated_token == tokenizer.eos_token_id:
                 break
                 
